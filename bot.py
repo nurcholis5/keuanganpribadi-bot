@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """
-Bot Telegram - Pencatatan Keuangan Pribadi v4.0
+Bot Telegram - Pencatatan Keuangan Pribadi v5.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Changelog dari v4:
+  ✅ Integrasi Claude AI (Anthropic) — 4 mode AI via tombol keyboard:
+     💬 Konsultasi Keuangan — tanya jawab bebas seputar keuangan
+     🧠 Strategi Keuangan   — rencana menabung & investasi personal
+     🛒 Saran Beli AI       — evaluasi pembelian lebih dalam dari /simulasi
+     📊 Analisis AI         — Claude baca data transaksimu & beri insight
+  ✅ Setiap mode AI punya system prompt & karakter berbeda
+  ✅ Mode AI aktif disimpan per user — bisa ganti kapan saja
+  ✅ Tombol 🔙 Kembali ke Menu Utama di setiap mode AI
+  ✅ Perintah /aimode untuk lihat mode AI aktif saat ini
+
 Changelog dari v3:
   ✅ Perintah /aturbudget <pemasukan> — auto-bagi budget ke semua kategori
-     Bot hitung otomatis: makan, warkop, BPJS (tetap 75rb), transport,
-     belanja, tabungan, lainnya — proporsional dari pemasukan
   ✅ BPJS selalu 75.000 (biaya tetap), sisa dibagi proporsional
   ✅ Inline keyboard: Terapkan / Ubah Manual / Batal setelah lihat saran
   ✅ Tombol keyboard baru: 📐 Atur Budget Otomatis
@@ -34,7 +43,9 @@ Changelog dari v1:
 
 import os
 import re
+import json
 import logging
+import httpx
 from datetime import datetime, date, timedelta
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -44,7 +55,69 @@ from telegram.ext import (
 import sqlite3
 
 # ── Konfigurasi ───────────────────────────────────────────────────────────────
-TOKEN = os.environ.get("TELEGRAM_TOKEN", "ISI_TOKEN_BOT_KAMU_DISINI")
+TOKEN         = os.environ.get("TELEGRAM_TOKEN", "ISI_TOKEN_BOT_KAMU_DISINI")
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "ISI_ANTHROPIC_API_KEY_DISINI")
+
+# ── Definisi Mode AI ──────────────────────────────────────────────────────────
+AI_MODES = {
+    "konsultasi": {
+        "label":  "💬 Konsultasi Keuangan",
+        "desc":   "Tanya jawab bebas seputar keuangan pribadi",
+        "system": (
+            "Kamu adalah konsultan keuangan pribadi yang ramah, sabar, dan berbicara "
+            "dalam Bahasa Indonesia yang santai namun profesional. "
+            "Kamu membantu pengguna memahami konsep keuangan, menjawab pertanyaan "
+            "seputar pengelolaan uang harian, hutang, pengeluaran, dan gaya hidup hemat. "
+            "Berikan jawaban yang praktis, jelas, dan mudah dipahami orang awam. "
+            "Gunakan contoh angka dalam Rupiah jika relevan. "
+            "Jangan terlalu panjang — fokus dan to the point."
+        ),
+    },
+    "strategi": {
+        "label":  "🧠 Strategi Keuangan",
+        "desc":   "Rencana menabung, investasi & tujuan finansial",
+        "system": (
+            "Kamu adalah perencana keuangan strategis yang berpengalaman. "
+            "Kamu berbicara dalam Bahasa Indonesia yang lugas dan terstruktur. "
+            "Tugasmu adalah membantu pengguna membuat rencana keuangan jangka pendek "
+            "dan jangka panjang: menabung untuk tujuan tertentu, mulai investasi, "
+            "memilih instrumen keuangan yang sesuai (deposito, reksa dana, emas, saham), "
+            "dan membangun kebiasaan finansial yang sehat. "
+            "Selalu tanyakan konteks: berapa pemasukan, pengeluaran rutin, dan tujuan finansialnya. "
+            "Berikan langkah konkret yang bisa langsung diterapkan."
+        ),
+    },
+    "saran_beli": {
+        "label":  "🛒 Saran Beli AI",
+        "desc":   "Evaluasi mendalam sebelum beli barang",
+        "system": (
+            "Kamu adalah advisor belanja cerdas yang membantu pengguna berpikir jernih "
+            "sebelum membeli sesuatu. Berbicara dalam Bahasa Indonesia yang jujur dan supportif. "
+            "Ketika pengguna menyebut barang yang ingin dibeli, evaluasi dari sudut: "
+            "1) Apakah ini kebutuhan atau keinginan? "
+            "2) Apakah ada alternatif lebih murah/hemat? "
+            "3) Dampak ke keuangan bulanan jika dibeli sekarang vs ditunda. "
+            "4) Apakah timing pembeliannya tepat? "
+            "Bersikap jujur tapi tidak menghakimi. Berikan perspektif yang membantu, "
+            "bukan sekadar melarang atau membolehkan."
+        ),
+    },
+    "analisis": {
+        "label":  "📊 Analisis Keuangan AI",
+        "desc":   "Claude analisis data transaksimu & beri insight",
+        "system": (
+            "Kamu adalah analis keuangan personal yang cermat dan analitis. "
+            "Kamu akan menerima data transaksi pengeluaran pengguna dalam format terstruktur, "
+            "lalu memberikan analisis mendalam: pola pengeluaran, kategori paling boros, "
+            "perbandingan budget vs realisasi, tren positif/negatif, dan rekomendasi konkret. "
+            "Berbicara dalam Bahasa Indonesia yang profesional namun mudah dipahami. "
+            "Gunakan emoji secukupnya agar mudah dibaca di Telegram. "
+            "Selalu akhiri dengan 2-3 saran actionable yang spesifik."
+        ),
+    },
+}
+
+AI_MODE_KEY = "ai_mode"  # key untuk ctx.user_data
 
 # Budget default untuk user baru (bisa di-override per user via /setbudget)
 DEFAULT_BUDGET = {
@@ -384,7 +457,16 @@ def main_keyboard():
         [KeyboardButton("📋 Transaksi Terakhir"), KeyboardButton("🗑 Hapus Terakhir")],
         [KeyboardButton("📈 Statistik 7 Hari"),   KeyboardButton("📤 Export Laporan")],
         [KeyboardButton("🧮 Simulasi Beli"),       KeyboardButton("📐 Atur Budget Otomatis")],
+        [KeyboardButton("🤖 Menu AI Keuangan")],
         [KeyboardButton("⚙️ Pengaturan"),          KeyboardButton("💡 Cara Pakai")],
+    ], resize_keyboard=True)
+
+def ai_keyboard():
+    """Keyboard khusus saat mode AI aktif."""
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("💬 Konsultasi Keuangan"), KeyboardButton("🧠 Strategi Keuangan")],
+        [KeyboardButton("🛒 Saran Beli AI"),        KeyboardButton("📊 Analisis Keuangan AI")],
+        [KeyboardButton("🔙 Kembali ke Menu Utama")],
     ], resize_keyboard=True)
 
 def konfirmasi_keyboard(action: str):
@@ -395,26 +477,78 @@ def konfirmasi_keyboard(action: str):
         ]
     ])
 
+# ── Claude AI Integration ─────────────────────────────────────────────────────
+async def tanya_claude(system_prompt: str, user_message: str) -> str:
+    """
+    Kirim pesan ke Anthropic Claude API dan kembalikan responnya.
+    Menggunakan httpx agar tidak perlu install anthropic SDK terpisah.
+    """
+    headers = {
+        "x-api-key":         ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type":      "application/json",
+    }
+    payload = {
+        "model":      "claude-3-5-haiku-20241022",
+        "max_tokens": 1024,
+        "system":     system_prompt,
+        "messages":   [{"role": "user", "content": user_message}],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["content"][0]["text"]
+    except httpx.TimeoutException:
+        return "⏱ Maaf, koneksi ke AI timeout. Coba lagi sebentar ya."
+    except Exception as e:
+        logging.error(f"Claude API error: {e}")
+        return "❌ Gagal menghubungi AI. Pastikan ANTHROPIC_API_KEY sudah diset dengan benar."
+
+def buat_konteks_keuangan(uid: int) -> str:
+    """Buat ringkasan data keuangan user sebagai konteks untuk Claude."""
+    pemasukan    = get_pemasukan(uid)
+    bulan_ini    = date.today().strftime("%Y-%m")
+    total_bulan  = get_pengeluaran_bulan(uid, bulan_ini)
+    budget_user  = get_budget(uid)
+    total_keluar = sum(total_bulan.values())
+    sisa         = pemasukan - total_keluar
+    label_bulan  = date.today().strftime("%B %Y")
+
+    baris = [f"=== DATA KEUANGAN USER ({label_bulan}) ==="]
+    baris.append(f"Pemasukan bulanan : Rp {pemasukan:,}")
+    baris.append(f"Total pengeluaran : Rp {total_keluar:,}")
+    baris.append(f"Sisa budget       : Rp {sisa:,}")
+    baris.append("")
+    baris.append("Pengeluaran per kategori:")
+    for kat, budget in budget_user.items():
+        spent  = total_bulan.get(kat, 0)
+        persen = (spent / budget * 100) if budget > 0 else 0
+        baris.append(f"  {kat:<12}: Rp {spent:>10,} / budget Rp {budget:>10,} ({persen:.0f}%)")
+    baris.append("=" * 40)
+    return "\n".join(baris)
+
 # ── Handlers ──────────────────────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     nama = update.effective_user.first_name
     await update.message.reply_text(
         f"Halo *{nama}*! 👋\n\n"
-        "Aku adalah bot pencatat keuangan pribadimu *v3.0*\n\n"
+        "Aku adalah bot pencatat keuangan pribadimu *v5.0*\n\n"
         "📌 *Cara catat pengeluaran:*\n"
         "`makan siang 15000`\n"
         "`warkop nulis 27.5rb`\n"
-        "`beli ayam 40k`\n"
-        "`gas lpg 22000`\n\n"
-        "🧮 *Simulasi beli barang:*\n"
-        "`/simulasi baju 250000`\n"
-        "`/simulasi sepatu 500rb`\n"
-        "`/simulasi tas 1.2jt`\n\n"
-        "✨ *Fitur baru v3:*\n"
-        "• Simulasi pembelian barang — cek worth it atau tidak!\n"
-        "• Analisis % dari pemasukan & sisa budget\n"
-        "• Tombol 🧮 Simulasi Beli di keyboard\n\n"
-        "Ketuk tombol di bawah untuk mulai! 👇",
+        "`beli ayam 40k`\n\n"
+        "🤖 *Fitur AI baru v5:*\n"
+        "• 💬 Konsultasi keuangan bebas\n"
+        "• 🧠 Strategi menabung & investasi\n"
+        "• 🛒 Saran beli barang lebih mendalam\n"
+        "• 📊 Analisis laporan bulananmu\n\n"
+        "Ketuk *🤖 Menu AI Keuangan* untuk mulai! 👇",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
@@ -821,7 +955,7 @@ async def catat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     teks = update.message.text.strip()
 
-    # Routing tombol keyboard
+    # Routing tombol keyboard utama
     routing = {
         "📊 Ringkasan Bulan Ini":      ringkasan,
         "📋 Transaksi Terakhir":       transaksi_terakhir,
@@ -830,6 +964,7 @@ async def catat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📤 Export Laporan":           export_laporan,
         "🧮 Simulasi Beli":            simulasi_beli_info,
         "📐 Atur Budget Otomatis":     aturbudget_info,
+        "🤖 Menu AI Keuangan":         menu_ai,
         "⚙️ Pengaturan":               pengaturan,
         "💡 Cara Pakai":               cara_pakai,
     }
@@ -837,6 +972,31 @@ async def catat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await routing[teks](update, ctx)
         return
 
+    # Routing tombol keyboard AI
+    ai_routing = {
+        "💬 Konsultasi Keuangan":  "konsultasi",
+        "🧠 Strategi Keuangan":    "strategi",
+        "🛒 Saran Beli AI":        "saran_beli",
+        "📊 Analisis Keuangan AI": "analisis",
+    }
+    if teks in ai_routing:
+        await set_ai_mode(update, ctx, ai_routing[teks])
+        return
+
+    if teks == "🔙 Kembali ke Menu Utama":
+        ctx.user_data.pop(AI_MODE_KEY, None)
+        await update.message.reply_text(
+            "✅ Kembali ke menu utama.",
+            reply_markup=main_keyboard()
+        )
+        return
+
+    # Jika mode AI aktif, kirim teks ke Claude
+    if ctx.user_data.get(AI_MODE_KEY):
+        await proses_pesan_ai(update, ctx)
+        return
+
+    # Mode normal: catat pengeluaran
     hasil = parse_pesan(teks)
     if not hasil:
         await update.message.reply_text(
@@ -845,7 +1005,8 @@ async def catat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "`makan siang 15000`\n"
             "`27.5rb warkop nulis`\n"
             "`40k beli ayam`\n"
-            "`1.5jt bayar sewa`",
+            "`1.5jt bayar sewa`\n\n"
+            "Atau ketuk *🤖 Menu AI Keuangan* untuk konsultasi dengan AI.",
             parse_mode="Markdown",
             reply_markup=main_keyboard()
         )
@@ -999,6 +1160,88 @@ async def simulasi_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(teks, parse_mode="Markdown", reply_markup=main_keyboard())
 
 
+# ── AI Handlers ───────────────────────────────────────────────────────────────
+async def menu_ai(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Tampilkan menu pilihan mode AI."""
+    teks  = "🤖 *Menu AI Keuangan*\n\n"
+    teks += "Pilih mode AI yang ingin kamu gunakan:\n\n"
+    for key, mode in AI_MODES.items():
+        teks += f"{mode['label']}\n"
+        teks += f"  _{mode['desc']}_\n\n"
+    teks += "Ketuk tombol di bawah untuk mulai bicara dengan AI 👇"
+    await update.message.reply_text(teks, parse_mode="Markdown", reply_markup=ai_keyboard())
+
+async def set_ai_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE, mode_key: str):
+    """Set mode AI aktif dan tampilkan instruksi."""
+    ctx.user_data[AI_MODE_KEY] = mode_key
+    mode = AI_MODES[mode_key]
+    contoh = {
+        "konsultasi": "Bagaimana cara mulai menabung dengan gaji 2 juta?",
+        "strategi":   "Aku mau beli motor 18 bulan lagi, harganya 20 juta. Gimana strateginya?",
+        "saran_beli": "Aku mau beli HP baru seharga 3 juta, boleh gak ya?",
+        "analisis":   "Tolong analisis pengeluaranku bulan ini",
+    }
+    teks  = f"{mode['label']} *aktif!* 🟢\n\n"
+    teks += f"_{mode['desc']}_\n\n"
+    teks += f"Langsung ketik pertanyaan atau permintaanmu.\n\n"
+    teks += f"💡 *Contoh:*\n`{contoh.get(mode_key, '')}`\n\n"
+    teks += "Ketuk *🔙 Kembali ke Menu Utama* untuk keluar dari mode AI."
+    await update.message.reply_text(teks, parse_mode="Markdown", reply_markup=ai_keyboard())
+
+async def proses_pesan_ai(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Proses pesan user dalam mode AI aktif."""
+    uid      = update.effective_user.id
+    mode_key = ctx.user_data.get(AI_MODE_KEY)
+    teks     = update.message.text.strip()
+
+    if not mode_key or mode_key not in AI_MODES:
+        return False  # bukan mode AI, lanjut ke handler catat
+
+    mode          = AI_MODES[mode_key]
+    system_prompt = mode["system"]
+
+    # Untuk mode analisis, sertakan data keuangan nyata user
+    if mode_key == "analisis":
+        konteks      = buat_konteks_keuangan(uid)
+        user_message = f"{konteks}\n\nPermintaan user: {teks}"
+    else:
+        user_message = teks
+
+    # Tampilkan indikator "sedang mengetik"
+    await update.message.reply_text("⏳ _AI sedang memproses..._", parse_mode="Markdown")
+
+    balasan = await tanya_claude(system_prompt, user_message)
+
+    # Potong jika terlalu panjang untuk Telegram (max 4096 karakter)
+    if len(balasan) > 4000:
+        balasan = balasan[:4000] + "\n\n_...jawaban dipotong karena terlalu panjang_"
+
+    await update.message.reply_text(
+        f"🤖 *{mode['label']}*\n{'─' * 24}\n\n{balasan}",
+        parse_mode="Markdown",
+        reply_markup=ai_keyboard()
+    )
+    return True  # sudah dihandle oleh AI
+
+async def aimode_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Tampilkan mode AI yang sedang aktif."""
+    mode_key = ctx.user_data.get(AI_MODE_KEY)
+    if not mode_key:
+        await update.message.reply_text(
+            "ℹ️ Tidak ada mode AI yang aktif saat ini.\n"
+            "Ketuk *🤖 Menu AI Keuangan* untuk mulai.",
+            parse_mode="Markdown",
+            reply_markup=main_keyboard()
+        )
+    else:
+        mode = AI_MODES[mode_key]
+        await update.message.reply_text(
+            f"🟢 Mode AI aktif: *{mode['label']}*\n_{mode['desc']}_",
+            parse_mode="Markdown",
+            reply_markup=ai_keyboard()
+        )
+
+
 def main():
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -1008,6 +1251,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start",         start))
+    app.add_handler(CommandHandler("aimode",        aimode_cmd))
     app.add_handler(CommandHandler("aturbudget",    aturbudget_cmd))
     app.add_handler(CommandHandler("simulasi",      simulasi_cmd))
     app.add_handler(CommandHandler("setbudget",     set_budget_cmd))
@@ -1017,7 +1261,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, catat))
 
-    print("✅ Bot Keuangan v4.0 berjalan...")
+    print("✅ Bot Keuangan v5.0 berjalan...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
