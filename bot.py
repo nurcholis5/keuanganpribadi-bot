@@ -1,7 +1,23 @@
 #!/usr/bin/env python3
 """
-Bot Telegram - Pencatatan Keuangan Pribadi v2.0
+Bot Telegram - Pencatatan Keuangan Pribadi v4.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Changelog dari v3:
+  ✅ Perintah /aturbudget <pemasukan> — auto-bagi budget ke semua kategori
+     Bot hitung otomatis: makan, warkop, BPJS (tetap 75rb), transport,
+     belanja, tabungan, lainnya — proporsional dari pemasukan
+  ✅ BPJS selalu 75.000 (biaya tetap), sisa dibagi proporsional
+  ✅ Inline keyboard: Terapkan / Ubah Manual / Batal setelah lihat saran
+  ✅ Tombol keyboard baru: 📐 Atur Budget Otomatis
+
+Changelog dari v2:
+  ✅ Perintah /simulasi  — kalkulasi worth it tidaknya beli suatu barang
+     Contoh: /simulasi baju 250000
+             /simulasi sepatu 500rb
+             /simulasi tas 1.2jt
+  ✅ Penilaian worth it berdasarkan % dari pemasukan & sisa budget
+  ✅ Tombol keyboard baru: 🧮 Simulasi Beli
+
 Changelog dari v1:
   ✅ Multi-user: setiap user punya data & budget sendiri
   ✅ Input fleksibel: support "15k", "15rb", "1.5jt", "15ribu"
@@ -40,6 +56,21 @@ DEFAULT_BUDGET = {
     "lainnya":  100_000,
 }
 DEFAULT_PEMASUKAN = 2_000_000
+
+# ── Proporsi alokasi budget otomatis ─────────────────────────────────────────
+# BPJS adalah biaya TETAP 75.000 — sisanya dibagi proporsional
+BPJS_TETAP = 75_000
+
+# Proporsi dari sisa (setelah BPJS dikurangi), total harus = 1.0
+PROPORSI_BUDGET = {
+    "makan":     0.40,   # 40% — kebutuhan utama harian
+    "warkop":    0.10,   # 10% — kerja di warkop (makan+minum)
+    "transport": 0.10,   # 10% — ojek, bensin, dll
+    "belanja":   0.12,   # 12% — kebutuhan rumah (sabun, gas, dll)
+    "tabungan":  0.18,   # 18% — tabungan/investasi
+    "lainnya":   0.10,   # 10% — tak terduga / hiburan
+}
+# Catatan: BPJS tidak masuk proporsi karena nilainya tetap
 
 # Kata kunci kategori (sama seperti v1, ditambah beberapa)
 KATEGORI_KATA = {
@@ -298,12 +329,61 @@ def cek_peringatan(user_id: int, kategori: str, total_bulan: dict) -> str | None
         return f"⚠️ Budget *{kategori}* sudah {persen:.0f}% terpakai — hampir habis!"
     return None
 
+def hitung_alokasi_otomatis(pemasukan: int) -> dict:
+    """
+    Hitung alokasi budget otomatis berdasarkan pemasukan.
+    BPJS selalu tetap 75.000. Sisa dibagi proporsional ke kategori lain.
+    """
+    sisa_setelah_bpjs = max(pemasukan - BPJS_TETAP, 0)
+    hasil = {"bpjs": BPJS_TETAP}
+    for kategori, proporsi in PROPORSI_BUDGET.items():
+        hasil[kategori] = int(sisa_setelah_bpjs * proporsi)
+    return hasil
+
+def format_alokasi_preview(pemasukan: int, alokasi: dict) -> str:
+    """Format preview alokasi budget untuk ditampilkan ke user."""
+    total_alokasi       = sum(alokasi.values())
+    sisa_tak_teralokasi = pemasukan - total_alokasi
+
+    teks  = f"📐 *Saran Alokasi Budget Otomatis*\n"
+    teks += f"💵 Pemasukan: *{format_rupiah(pemasukan)}*\n"
+    teks += f"{'─' * 28}\n\n"
+
+    urutan = ["makan", "warkop", "transport", "belanja", "bpjs", "tabungan", "lainnya"]
+    label_extra = {
+        "makan":     "makan harian",
+        "warkop":    "kerja di warkop",
+        "transport": "ojek / bensin",
+        "belanja":   "kebutuhan rumah",
+        "bpjs":      "iuran tetap BPJS ✱",
+        "tabungan":  "tabungan / investasi",
+        "lainnya":   "tak terduga / hiburan",
+    }
+    for kat in urutan:
+        if kat not in alokasi:
+            continue
+        jml    = alokasi[kat]
+        ikon   = IKON.get(kat, "•")
+        persen = (jml / pemasukan * 100) if pemasukan > 0 else 0
+        extra  = label_extra.get(kat, "")
+        teks  += f"{ikon} *{kat.capitalize()}*  _{extra}_\n"
+        teks  += f"   → *{format_rupiah(jml)}*  ({persen:.1f}%)\n\n"
+
+    teks += f"{'─' * 28}\n"
+    teks += f"📊 Total dialokasi : *{format_rupiah(total_alokasi)}*\n"
+    if sisa_tak_teralokasi > 0:
+        teks += f"💚 Sisa cadangan   : *{format_rupiah(sisa_tak_teralokasi)}*\n"
+    teks += f"\n✱ _BPJS selalu tetap Rp 75.000/bulan_\n\n"
+    teks += "Terapkan alokasi ini sebagai budget kamu?"
+    return teks
+
 # ── Keyboard ──────────────────────────────────────────────────────────────────
 def main_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 Ringkasan Bulan Ini")],
         [KeyboardButton("📋 Transaksi Terakhir"), KeyboardButton("🗑 Hapus Terakhir")],
         [KeyboardButton("📈 Statistik 7 Hari"),   KeyboardButton("📤 Export Laporan")],
+        [KeyboardButton("🧮 Simulasi Beli"),       KeyboardButton("📐 Atur Budget Otomatis")],
         [KeyboardButton("⚙️ Pengaturan"),          KeyboardButton("💡 Cara Pakai")],
     ], resize_keyboard=True)
 
@@ -320,18 +400,20 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     nama = update.effective_user.first_name
     await update.message.reply_text(
         f"Halo *{nama}*! 👋\n\n"
-        "Aku adalah bot pencatat keuangan pribadimu *v2.0*\n\n"
+        "Aku adalah bot pencatat keuangan pribadimu *v3.0*\n\n"
         "📌 *Cara catat pengeluaran:*\n"
         "`makan siang 15000`\n"
         "`warkop nulis 27.5rb`\n"
         "`beli ayam 40k`\n"
         "`gas lpg 22000`\n\n"
-        "✨ *Fitur baru v2:*\n"
-        "• Input `15k`, `15rb`, `1.5jt` sekarang didukung\n"
-        "• Statistik harian 7 hari terakhir\n"
-        "• Export laporan teks lengkap\n"
-        "• Atur budget & pemasukan sendiri\n"
-        "• Mendukung banyak pengguna\n\n"
+        "🧮 *Simulasi beli barang:*\n"
+        "`/simulasi baju 250000`\n"
+        "`/simulasi sepatu 500rb`\n"
+        "`/simulasi tas 1.2jt`\n\n"
+        "✨ *Fitur baru v3:*\n"
+        "• Simulasi pembelian barang — cek worth it atau tidak!\n"
+        "• Analisis % dari pemasukan & sisa budget\n"
+        "• Tombol 🧮 Simulasi Beli di keyboard\n\n"
         "Ketuk tombol di bawah untuk mulai! 👇",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
@@ -339,12 +421,18 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cara_pakai(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "💡 *Cara Pakai Bot Keuangan v2*\n\n"
-        "*📝 Format input:*\n"
+        "💡 *Cara Pakai Bot Keuangan v3*\n\n"
+        "*📝 Format input pengeluaran:*\n"
         "`15000 makan siang warung padang`\n"
         "`27.5rb warkop nulis naskah`\n"
         "`40k beli ayam 1kg`\n"
         "`1.5jt bayar sewa kos`\n\n"
+        "*🧮 Simulasi Pembelian Barang:*\n"
+        "`/simulasi baju 250000`\n"
+        "`/simulasi sepatu 500rb`\n"
+        "`/simulasi tas 1.2jt`\n"
+        "Bot akan menilai apakah pembelian *worth it* atau tidak\n"
+        "berdasarkan pemasukan & sisa budgetmu.\n\n"
         "*🏷 Kategori otomatis:*\n"
         "🍽 makan — warung, nasi, lauk, pasar\n"
         "☕ warkop — kopi, cafe, nulis, ngopi\n"
@@ -354,7 +442,9 @@ async def cara_pakai(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "🏍 transport — ojek, gojek, bensin\n"
         "📦 lainnya — sisanya\n\n"
         "*⚙️ Perintah tersedia:*\n"
-        "`/setbudget makan 1000000` — ubah budget kategori\n"
+        "`/aturbudget 2500000` — auto-bagi budget dari pemasukan\n"
+        "`/simulasi baju 250000` — cek worth it tidaknya beli barang\n"
+        "`/setbudget makan 1000000` — ubah budget kategori manual\n"
         "`/setpemasukan 3000000` — ubah total pemasukan\n"
         "`/bulan 2026-02` — lihat ringkasan bulan lalu\n"
         "`/reset` — hapus semua data bulan ini\n\n"
@@ -364,10 +454,78 @@ async def cara_pakai(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "🗑 Hapus Terakhir — batalkan input terakhir\n"
         "📈 Statistik 7 Hari — tren harian\n"
         "📤 Export — ringkasan teks lengkap\n"
+        "🧮 Simulasi Beli — cek worth it pembelian barang\n"
+        "📐 Atur Budget Otomatis — auto-bagi budget dari pemasukan\n"
         "⚙️ Pengaturan — lihat budget & pemasukan",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
+
+async def aturbudget_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Tampilkan panduan penggunaan fitur atur budget otomatis."""
+    pemasukan = get_pemasukan(update.effective_user.id)
+    await update.message.reply_text(
+        "📐 *Atur Budget Otomatis*\n\n"
+        "Bot akan menghitung pembagian budget yang ideal berdasarkan pemasukanmu.\n\n"
+        "*Format:*\n"
+        "`/aturbudget <pemasukan>`\n\n"
+        "*Contoh:*\n"
+        "`/aturbudget 2000000`\n"
+        "`/aturbudget 2.5jt`\n"
+        "`/aturbudget 3jt`\n\n"
+        "Bot akan membagi ke: makan, warkop, transport, belanja,\n"
+        "BPJS (tetap *Rp 75.000*), tabungan, dan lainnya.\n\n"
+        f"💡 Pemasukan kamu saat ini: *{format_rupiah(pemasukan)}*\n"
+        f"Coba: `/aturbudget {pemasukan}`",
+        parse_mode="Markdown",
+        reply_markup=main_keyboard()
+    )
+
+async def aturbudget_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Hitung & terapkan alokasi budget otomatis dari pemasukan.
+    Format: /aturbudget <pemasukan>
+    Contoh: /aturbudget 2500000  atau  /aturbudget 2.5jt
+    """
+    uid  = update.effective_user.id
+    args = ctx.args
+
+    if not args:
+        await update.message.reply_text(
+            "❌ Masukkan nominal pemasukan.\n\n"
+            "Contoh: `/aturbudget 2500000` atau `/aturbudget 2.5jt`",
+            parse_mode="Markdown"
+        )
+        return
+
+    pemasukan = parse_angka(args[0])
+    if not pemasukan or pemasukan < 100_000:
+        await update.message.reply_text(
+            "❌ Nominal tidak valid atau terlalu kecil (min Rp 100.000).\n"
+            "Contoh: `2500000`, `2.5jt`, `3jt`",
+            parse_mode="Markdown"
+        )
+        return
+
+    alokasi  = hitung_alokasi_otomatis(pemasukan)
+    preview  = format_alokasi_preview(pemasukan, alokasi)
+
+    # Simpan sementara di context user_data untuk dipakai saat confirm
+    ctx.user_data["pending_alokasi"]    = alokasi
+    ctx.user_data["pending_pemasukan"]  = pemasukan
+
+    # Inline keyboard: Terapkan / Ubah Manual / Batal
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Terapkan Semua", callback_data="alokasi_terapkan"),
+            InlineKeyboardButton("❌ Batal",          callback_data="cancel"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Ubah Manual (via /setbudget)", callback_data="alokasi_manual"),
+        ]
+    ])
+
+    await update.message.reply_text(preview, parse_mode="Markdown", reply_markup=keyboard)
 
 async def ringkasan(update: Update, ctx: ContextTypes.DEFAULT_TYPE, bulan: str = None):
     uid         = update.effective_user.id
@@ -618,19 +776,62 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "cancel":
         await query.edit_message_text("❌ Dibatalkan.")
 
+    elif data == "alokasi_terapkan":
+        alokasi   = ctx.user_data.get("pending_alokasi")
+        pemasukan = ctx.user_data.get("pending_pemasukan")
+        if not alokasi or not pemasukan:
+            await query.edit_message_text("❌ Data alokasi tidak ditemukan. Coba `/aturbudget` lagi.", parse_mode="Markdown")
+            return
+
+        # Simpan pemasukan & semua budget ke DB
+        set_pemasukan(uid, pemasukan)
+        for kat, jml in alokasi.items():
+            set_budget(uid, kat, jml)
+
+        # Buat ringkasan konfirmasi
+        teks  = "✅ *Budget berhasil diterapkan!*\n\n"
+        teks += f"💵 Pemasukan : *{format_rupiah(pemasukan)}*\n"
+        teks += f"{'─' * 24}\n"
+        urutan = ["makan", "warkop", "transport", "belanja", "bpjs", "tabungan", "lainnya"]
+        for kat in urutan:
+            if kat in alokasi:
+                ikon = IKON.get(kat, "•")
+                teks += f"{ikon} {kat.capitalize():<12}: *{format_rupiah(alokasi[kat])}*\n"
+        teks += f"\n💡 Gunakan `/setbudget` untuk mengubah kategori tertentu secara manual."
+
+        ctx.user_data.pop("pending_alokasi",   None)
+        ctx.user_data.pop("pending_pemasukan", None)
+
+        await query.edit_message_text(teks, parse_mode="Markdown")
+
+    elif data == "alokasi_manual":
+        alokasi   = ctx.user_data.get("pending_alokasi", {})
+        teks  = "✏️ *Ubah Manual via /setbudget*\n\n"
+        teks += "Salin dan edit perintah di bawah sesuai kebutuhanmu:\n\n"
+        urutan = ["makan", "warkop", "transport", "belanja", "bpjs", "tabungan", "lainnya"]
+        for kat in urutan:
+            if kat in alokasi:
+                teks += f"`/setbudget {kat} {alokasi[kat]}`\n"
+        teks += f"\nDan jangan lupa set pemasukan:\n"
+        pemasukan = ctx.user_data.get("pending_pemasukan", 0)
+        teks += f"`/setpemasukan {pemasukan}`"
+        await query.edit_message_text(teks, parse_mode="Markdown")
+
 async def catat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
     teks = update.message.text.strip()
 
     # Routing tombol keyboard
     routing = {
-        "📊 Ringkasan Bulan Ini":  ringkasan,
-        "📋 Transaksi Terakhir":   transaksi_terakhir,
-        "🗑 Hapus Terakhir":       hapus_terakhir,
-        "📈 Statistik 7 Hari":    statistik,
-        "📤 Export Laporan":       export_laporan,
-        "⚙️ Pengaturan":           pengaturan,
-        "💡 Cara Pakai":           cara_pakai,
+        "📊 Ringkasan Bulan Ini":      ringkasan,
+        "📋 Transaksi Terakhir":       transaksi_terakhir,
+        "🗑 Hapus Terakhir":           hapus_terakhir,
+        "📈 Statistik 7 Hari":        statistik,
+        "📤 Export Laporan":           export_laporan,
+        "🧮 Simulasi Beli":            simulasi_beli_info,
+        "📐 Atur Budget Otomatis":     aturbudget_info,
+        "⚙️ Pengaturan":               pengaturan,
+        "💡 Cara Pakai":               cara_pakai,
     }
     if teks in routing:
         await routing[teks](update, ctx)
@@ -670,7 +871,134 @@ async def catat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(balasan, parse_mode="Markdown", reply_markup=main_keyboard())
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+async def simulasi_beli_info(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Tampilkan panduan penggunaan fitur simulasi."""
+    await update.message.reply_text(
+        "🧮 *Simulasi Beli Barang*\n\n"
+        "Gunakan perintah `/simulasi` untuk cek apakah suatu pembelian worth it.\n\n"
+        "*Format:*\n"
+        "`/simulasi <nama barang> <harga>`\n\n"
+        "*Contoh:*\n"
+        "`/simulasi baju 250000`\n"
+        "`/simulasi sepatu 500rb`\n"
+        "`/simulasi tas 1.2jt`\n"
+        "`/simulasi celana jeans 350k`\n\n"
+        "Bot akan menghitung apakah pembelian tersebut aman dan worth it "
+        "berdasarkan pemasukan & sisa budget bulan ini. 💡",
+        parse_mode="Markdown",
+        reply_markup=main_keyboard()
+    )
+
+async def simulasi_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Simulasi pembelian barang.
+    Format: /simulasi <nama barang> <harga>
+    Contoh: /simulasi baju 250000
+            /simulasi sepatu 500rb
+            /simulasi tas 1.2jt
+    """
+    uid  = update.effective_user.id
+    args = ctx.args
+
+    if not args or len(args) < 2:
+        await update.message.reply_text(
+            "❌ *Format kurang lengkap.*\n\n"
+            "Contoh penggunaan:\n"
+            "`/simulasi baju 250000`\n"
+            "`/simulasi sepatu 500rb`\n"
+            "`/simulasi tas 1.2jt`\n\n"
+            "Format: `/simulasi <nama barang> <harga>`",
+            parse_mode="Markdown",
+            reply_markup=main_keyboard()
+        )
+        return
+
+    # Pisahkan nama barang dan harga — harga ada di token terakhir
+    harga_raw  = args[-1]
+    nama_barang = " ".join(args[:-1]).strip()
+    harga = parse_angka(harga_raw)
+
+    if not harga or harga < 1000:
+        await update.message.reply_text(
+            "❌ Harga tidak valid atau terlalu kecil.\n"
+            "Contoh: `250000`, `500rb`, `1.2jt`",
+            parse_mode="Markdown"
+        )
+        return
+
+    # ── Ambil data keuangan user ──────────────────────────────────────────────
+    pemasukan    = get_pemasukan(uid)
+    total_bulan  = get_pengeluaran_bulan(uid)
+    total_keluar = sum(total_bulan.values())
+    sisa_budget  = pemasukan - total_keluar  # sisa belum dipakai bulan ini
+
+    # ── Kalkulasi ─────────────────────────────────────────────────────────────
+    persen_dari_pemasukan = (harga / pemasukan * 100) if pemasukan > 0 else 100
+    persen_dari_sisa      = (harga / sisa_budget * 100) if sisa_budget > 0 else 100
+    sisa_setelah_beli     = sisa_budget - harga
+
+    # ── Penilaian Worth It ────────────────────────────────────────────────────
+    if sisa_budget <= 0:
+        verdict       = "🚨 *JANGAN DULU!*"
+        verdict_detail = "Budget bulan ini sudah habis atau minus. Tunda pembelian ini."
+        skor          = "❌❌❌"
+    elif persen_dari_sisa >= 80:
+        verdict       = "🚨 *BERISIKO TINGGI*"
+        verdict_detail = "Pembelian ini akan menguras hampir seluruh sisa budgetmu bulan ini."
+        skor          = "❌❌❌"
+    elif persen_dari_sisa >= 50:
+        verdict       = "⚠️ *PERTIMBANGKAN LAGI*"
+        verdict_detail = "Bisa dibeli, tapi akan menyedot lebih dari setengah sisa budgetmu."
+        skor          = "⚠️⚠️"
+    elif persen_dari_pemasukan >= 20:
+        verdict       = "⚠️ *CUKUP BESAR*"
+        verdict_detail = "Harga ini cukup besar dibanding pemasukanmu. Pastikan memang perlu."
+        skor          = "⚠️"
+    elif persen_dari_sisa >= 20:
+        verdict       = "✅ *AMAN, TAPI HEMAT*"
+        verdict_detail = "Masih dalam batas wajar. Pastikan ini kebutuhan, bukan keinginan sesaat."
+        skor          = "✅✅"
+    else:
+        verdict       = "✅ *WORTH IT!*"
+        verdict_detail = "Pembelian ini aman dan tidak mengganggu keuanganmu bulan ini."
+        skor          = "✅✅✅"
+
+    # ── Susun pesan ───────────────────────────────────────────────────────────
+    teks  = f"🧮 *Simulasi Beli: {nama_barang.title()}*\n"
+    teks += f"{'─' * 28}\n\n"
+    teks += f"🏷 Harga barang     : *{format_rupiah(harga)}*\n\n"
+    teks += f"📊 *Kondisi Keuangan Bulan Ini:*\n"
+    teks += f"  💵 Pemasukan       : {format_rupiah(pemasukan)}\n"
+    teks += f"  💸 Sudah keluar    : {format_rupiah(total_keluar)}\n"
+    if sisa_budget >= 0:
+        teks += f"  💚 Sisa budget     : {format_rupiah(sisa_budget)}\n\n"
+    else:
+        teks += f"  🔴 Defisit budget  : -{format_rupiah(abs(sisa_budget))}\n\n"
+
+    teks += f"📈 *Analisis Pembelian:*\n"
+    teks += f"  % dari pemasukan   : *{persen_dari_pemasukan:.1f}%*\n"
+    if sisa_budget > 0:
+        teks += f"  % dari sisa budget : *{persen_dari_sisa:.1f}%*\n"
+        teks += f"  Sisa setelah beli  : *{format_rupiah(sisa_setelah_beli)}*\n\n"
+    else:
+        teks += f"\n"
+
+    teks += f"{'─' * 28}\n"
+    teks += f"🎯 *Verdict:* {verdict}\n"
+    teks += f"   {skor}\n\n"
+    teks += f"💬 _{verdict_detail}_\n\n"
+
+    # Tips tambahan berdasarkan kondisi
+    if sisa_setelah_beli < 0 or sisa_budget <= 0:
+        teks += "💡 *Tips:* Tunggu bulan depan atau cek apakah ada pos pengeluaran yang bisa dikurangi."
+    elif persen_dari_pemasukan >= 10:
+        teks += "💡 *Tips:* Tanya dirimu — ini kebutuhan atau keinginan? Kalau keinginan, coba tunda 3 hari."
+    else:
+        teks += "💡 *Tips:* Kalau memang butuh, silakan beli! Jangan lupa catat pengeluarannya ya 😊"
+
+    await update.message.reply_text(teks, parse_mode="Markdown", reply_markup=main_keyboard())
+
+
 def main():
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -680,6 +1008,8 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start",         start))
+    app.add_handler(CommandHandler("aturbudget",    aturbudget_cmd))
+    app.add_handler(CommandHandler("simulasi",      simulasi_cmd))
     app.add_handler(CommandHandler("setbudget",     set_budget_cmd))
     app.add_handler(CommandHandler("setpemasukan",  set_pemasukan_cmd))
     app.add_handler(CommandHandler("bulan",         bulan_cmd))
@@ -687,7 +1017,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, catat))
 
-    print("✅ Bot Keuangan v2.0 berjalan...")
+    print("✅ Bot Keuangan v4.0 berjalan...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
