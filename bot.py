@@ -483,7 +483,7 @@ async def tanya_claude(system_prompt: str, user_message: str) -> str:
     Kirim pesan ke Google Gemini API dan kembalikan responnya.
     Menggunakan httpx agar tidak perlu install google SDK terpisah.
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key={GEMINI_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
     headers = {"Content-Type": "application/json"}
     payload = {
         "system_instruction": {
