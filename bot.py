@@ -38,8 +38,8 @@ from telegram.ext import (
 import sqlite3
 
 # ── Konfigurasi ───────────────────────────────────────────────────────────────
-TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8622211655:AAF2eGMT-Os_xngjb_DBYPRvPTYeqVJi9D4")
-GLM_KEY = os.environ.get("GLM_API_KEY", "ad46520ca6194cd69ade28978988bd82.joFmudAMEfjW1sZK")
+TOKEN   = os.environ.get("TELEGRAM_TOKEN")
+GLM_KEY = os.environ.get("GLM_API_KEY")
 
 if not TOKEN:
     raise ValueError("❌ TELEGRAM_TOKEN belum diset! Jalankan: export TELEGRAM_TOKEN='token_kamu'")
@@ -428,46 +428,73 @@ def konfirmasi_keyboard(action: str):
         ]
     ])
 
-# ── GLM-5.1 AI Integration ────────────────────────────────────────────────────
+# ── GLM AI Integration ────────────────────────────────────────────────────────
+# Urutan model fallback: coba model utama dulu, kalau rate limit pakai cadangan
+GLM_MODELS = ["glm-4.7", "glm-4.7-flash", "glm-4.6", "glm-4.5", "glm-4.5-air", "glm-4.5-x", "glm-4.5-airx", "glm-4.5-flash"]
+
 async def tanya_claude(system_prompt: str, user_message: str) -> str:
     """
-    Kirim pesan ke Z.ai GLM-5.1 API dan kembalikan responnya.
-    Menggunakan OpenAI-compatible endpoint dari Z.ai.
+    Kirim pesan ke Z.ai GLM API dengan retry otomatis.
+    - Retry sampai 3x jika kena rate limit (429)
+    - Fallback ke model cadangan jika model utama tidak tersedia
     """
     url = "https://api.z.ai/api/paas/v4/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {GLM_KEY}"
     }
-    payload = {
-        "model": "glm-5.1",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_message}
-        ],
-        "max_tokens": 8192,
-        "temperature": 0.7,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
-    except httpx.TimeoutException:
-        return "⏱ Maaf, koneksi ke AI timeout. Coba lagi sebentar ya."
-    except httpx.HTTPStatusError as e:
-        status = e.response.status_code
-        if status == 401:
-            return "❌ API Key tidak valid. Pastikan GLM_API_KEY sudah benar."
-        elif status == 429:
-            return "⚠️ Terlalu banyak request. Tunggu sebentar lalu coba lagi."
-        else:
-            logging.error(f"GLM HTTP error {status}: {e}")
-            return f"❌ Gagal menghubungi AI (error {status}). Coba lagi nanti."
-    except Exception as e:
-        logging.error(f"GLM API error: {e}")
-        return "❌ Gagal menghubungi AI. Pastikan GLM_API_KEY sudah diset dengan benar."
+
+    import asyncio
+
+    for model in GLM_MODELS:
+        for attempt in range(3):  # retry 3x per model
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_message}
+                ],
+                "max_tokens": 8192,
+                "temperature": 0.7,
+            }
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+
+                    # Rate limit — tunggu lalu retry
+                    if resp.status_code == 429:
+                        wait = 3 * (attempt + 1)  # tunggu 3s, 6s, 9s
+                        logging.warning(f"Rate limit model {model}, retry {attempt+1}/3 dalam {wait}s...")
+                        await asyncio.sleep(wait)
+                        continue
+
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return data["choices"][0]["message"]["content"]
+
+            except httpx.TimeoutException:
+                if attempt == 2:
+                    logging.error(f"Timeout model {model} setelah 3x retry")
+                    continue  # coba model berikutnya
+                await asyncio.sleep(2)
+                continue
+
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                if status == 401:
+                    return "❌ API Key tidak valid. Pastikan GLM_API_KEY sudah benar."
+                elif status == 404:
+                    logging.warning(f"Model {model} tidak ditemukan, coba model berikutnya...")
+                    break  # skip ke model berikutnya
+                else:
+                    logging.error(f"GLM HTTP error {status} model {model}: {e}")
+                    break
+
+            except Exception as e:
+                logging.error(f"GLM error model {model}: {e}")
+                break
+
+    return "⏱ AI sedang sibuk. Coba lagi dalam 1-2 menit ya."
 
 def buat_konteks_keuangan(uid: int) -> str:
     pemasukan    = get_pemasukan(uid)
