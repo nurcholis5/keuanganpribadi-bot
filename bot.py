@@ -56,7 +56,7 @@ import sqlite3
 
 # ── Konfigurasi ───────────────────────────────────────────────────────────────
 TOKEN         = os.environ.get("TELEGRAM_TOKEN", "8622211655:AAF2eGMT-Os_xngjb_DBYPRvPTYeqVJi9D4")
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "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")
+GLM_KEY       = os.environ.get("GLM_API_KEY", "ad46520ca6194cd69ade28978988bd82.joFmudAMEfjW1sZK")
 
 # ── Definisi Mode AI ──────────────────────────────────────────────────────────
 AI_MODES = {
@@ -480,36 +480,34 @@ def konfirmasi_keyboard(action: str):
 # ── Claude AI Integration ─────────────────────────────────────────────────────
 async def tanya_claude(system_prompt: str, user_message: str) -> str:
     """
-    Kirim pesan ke Anthropic Claude API dan kembalikan responnya.
-    Menggunakan httpx agar tidak perlu install anthropic SDK terpisah.
+    Kirim pesan ke Z.ai GLM-5.1 API dan kembalikan responnya.
+    Menggunakan OpenAI-compatible endpoint dari Z.ai.
     """
+    url = "https://api.z.ai/api/paas/v4/chat/completions"
     headers = {
-        "x-api-key":         ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type":      "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {GLM_KEY}"
     }
     payload = {
-        "model":      "claude-3-5-haiku-20241022",
+        "model": "glm-5.1",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_message}
+        ],
         "max_tokens": 1024,
-        "system":     system_prompt,
-        "messages":   [{"role": "user", "content": user_message}],
+        "temperature": 0.7,
     }
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=headers,
-                json=payload,
-            )
+            resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
-            return data["content"][0]["text"]
+            return data["choices"][0]["message"]["content"]
     except httpx.TimeoutException:
-        return "⏱ Maaf, koneksi ke AI timeout. C
-oba lagi sebentar ya."
+        return "⏱ Maaf, koneksi ke AI timeout. Coba lagi sebentar ya."
     except Exception as e:
-        logging.error(f"Claude API error: {e}")
-        return "❌ Gagal menghubungi AI. Pastikan ANTHROPIC_API_KEY sudah diset dengan benar."
+        logging.error(f"GLM API error: {e}")
+        return "❌ Gagal menghubungi AI. Pastikan GLM_API_KEY sudah diset dengan benar."
 
 def buat_konteks_keuangan(uid: int) -> str:
     """Buat ringkasan data keuangan user sebagai konteks untuk Claude."""
