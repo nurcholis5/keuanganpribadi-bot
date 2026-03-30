@@ -38,8 +38,8 @@ from telegram.ext import (
 import sqlite3
 
 # ── Konfigurasi ───────────────────────────────────────────────────────────────
-TOKEN   = os.environ.get("TELEGRAM_TOKEN")
-GLM_KEY = os.environ.get("GLM_API_KEY")
+TOKEN         = os.environ.get("TELEGRAM_TOKEN", "8622211655:AAF2eGMT-Os_xngjb_DBYPRvPTYeqVJi9D4")
+GLM_KEY       = os.environ.get("GLM_API_KEY", "ad46520ca6194cd69ade28978988bd82.joFmudAMEfjW1sZK")
 
 if not TOKEN:
     raise ValueError("❌ TELEGRAM_TOKEN belum diset! Jalankan: export TELEGRAM_TOKEN='token_kamu'")
