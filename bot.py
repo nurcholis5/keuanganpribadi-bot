@@ -445,7 +445,7 @@ async def tanya_claude(system_prompt: str, user_message: str) -> str:
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_message}
         ],
-        "max_tokens": 1024,
+        "max_tokens": 8192,
         "temperature": 0.7,
     }
     try:
@@ -1025,8 +1025,8 @@ async def proses_pesan_ai(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     balasan = await tanya_claude(system_prompt, user_message)
 
-    if len(balasan) > 4000:
-        balasan = balasan[:4000] + "\n\n_...jawaban dipotong karena terlalu panjang_"
+    if len(balasan) > 4096:
+        balasan = balasan[:4096] + "\n\n_...jawaban dipotong karena terlalu panjang_"
 
     await update.message.reply_text(
         f"🤖 *{mode['label']}*\n{'─' * 24}\n\n{balasan}",
