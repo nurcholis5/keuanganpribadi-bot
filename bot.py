@@ -456,6 +456,7 @@ async def tanya_claude(system_prompt: str, user_message: str) -> str:
                 ],
                 "max_tokens": 8192,
                 "temperature": 0.7,
+              "stream": True,
               "thinking": {"type": "disabled"}
             }
             try:
