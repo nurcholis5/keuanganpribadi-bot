@@ -56,7 +56,7 @@ import sqlite3
 
 # ── Konfigurasi ───────────────────────────────────────────────────────────────
 TOKEN         = os.environ.get("TELEGRAM_TOKEN", "8622211655:AAF2eGMT-Os_xngjb_DBYPRvPTYeqVJi9D4")
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "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")
 
 # ── Definisi Mode AI ──────────────────────────────────────────────────────────
 AI_MODES = {
