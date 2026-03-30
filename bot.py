@@ -430,7 +430,7 @@ def konfirmasi_keyboard(action: str):
 
 # ── GLM AI Integration ────────────────────────────────────────────────────────
 # Urutan model fallback: coba model utama dulu, kalau rate limit pakai cadangan
-GLM_MODELS = ["glm-4.7", "glm-4.7-flash", "glm-4.6", "glm-4.5", "glm-4.5-air", "glm-4.5-x", "glm-4.5-airx", "glm-4.5-flash"]
+GLM_MODELS = ["glm-4.7-flash"]
 
 async def tanya_claude(system_prompt: str, user_message: str) -> str:
     """
@@ -456,6 +456,7 @@ async def tanya_claude(system_prompt: str, user_message: str) -> str:
                 ],
                 "max_tokens": 8192,
                 "temperature": 0.7,
+              "thinking": {"type": "disabled"}
             }
             try:
                 async with httpx.AsyncClient(timeout=60) as client:
