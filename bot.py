@@ -55,8 +55,8 @@ from telegram.ext import (
 import sqlite3
 
 # ── Konfigurasi ───────────────────────────────────────────────────────────────
-TOKEN         = os.environ.get("TELEGRAM_TOKEN", "8622211655:AAF2eGMT-Os_xngjb_DBYPRvPTYeqVJi9D4")
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "AIzaSyDUwQhcHSm40VBJ3pqVdsu1IZB76_MaXRg")
+TOKEN       = os.environ.get("TELEGRAM_TOKEN", "8622211655:AAF2eGMT-Os_xngjb_DBYPRvPTYeqVJi9D4")
+GEMINI_KEY  = os.environ.get("GEMINI_API_KEY", "AIzaSyDUwQhcHSm40VBJ3pqVdsu1IZB76_MaXRg")
 
 # ── Definisi Mode AI ──────────────────────────────────────────────────────────
 AI_MODES = {
@@ -477,38 +477,37 @@ def konfirmasi_keyboard(action: str):
         ]
     ])
 
-# ── Claude AI Integration ─────────────────────────────────────────────────────
+# ── Gemini AI Integration ─────────────────────────────────────────────────────
 async def tanya_claude(system_prompt: str, user_message: str) -> str:
     """
-    Kirim pesan ke Anthropic Claude API dan kembalikan responnya.
-    Menggunakan httpx agar tidak perlu install anthropic SDK terpisah.
+    Kirim pesan ke Google Gemini API dan kembalikan responnya.
+    Menggunakan httpx agar tidak perlu install google SDK terpisah.
     """
-    headers = {
-        "x-api-key":         ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type":      "application/json",
-    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key={GEMINI_KEY}"
+    headers = {"Content-Type": "application/json"}
     payload = {
-        "model":      "claude-3-5-haiku-20241022",
-        "max_tokens": 1024,
-        "system":     system_prompt,
-        "messages":   [{"role": "user", "content": user_message}],
+        "system_instruction": {
+            "parts": [{"text": system_prompt}]
+        },
+        "contents": [
+            {"parts": [{"text": user_message}]}
+        ],
+        "generationConfig": {
+            "maxOutputTokens": 1024,
+            "temperature": 0.7,
+        }
     }
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=headers,
-                json=payload,
-            )
+            resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
-            return data["content"][0]["text"]
+            return data["candidates"][0]["content"]["parts"][0]["text"]
     except httpx.TimeoutException:
         return "⏱ Maaf, koneksi ke AI timeout. Coba lagi sebentar ya."
     except Exception as e:
-        logging.error(f"Claude API error: {e}")
-        return "❌ Gagal menghubungi AI. Pastikan ANTHROPIC_API_KEY sudah diset dengan benar."
+        logging.error(f"Gemini API error: {e}")
+        return "❌ Gagal menghubungi AI. Pastikan GEMINI_API_KEY sudah diset dengan benar."
 
 def buat_konteks_keuangan(uid: int) -> str:
     """Buat ringkasan data keuangan user sebagai konteks untuk Claude."""
