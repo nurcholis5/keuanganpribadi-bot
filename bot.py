@@ -151,7 +151,7 @@ KATEGORI_KATA = {
         "makan", "nasi", "lauk", "ayam", "ikan", "tempe", "tahu",
         "sayur", "warung", "padang", "siang", "malam", "sarapan",
         "beli bahan", "pasar", "telur", "kangkung", "bayam", "soto",
-        "bakso", "mie", "indomie", "goreng", "rendang", "pecel"
+        "bakso", "mie", "indomie", "goreng", "rendang", "pecel", "bakso"
     ],
     "warkop": [
         "warkop", "warung kopi", "kopi", "cafe", "nulis", "naskah",
